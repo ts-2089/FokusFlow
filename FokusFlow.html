@@ -1,0 +1,1263 @@
+<!DOCTYPE html>
+<html lang="de" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="FokusFlow" />
+  <title>FokusFlow – Habit & Ziel Dashboard</title>
+
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            slate: {
+              850: '#151e2e',
+              950: '#090d16'
+            }
+          }
+        }
+      }
+    };
+  </script>
+
+  <!-- React & ReactDOM via CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Babel für JSX im Browser -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Firebase SDK (App & Firestore) für Echtzeit-Cloud-Sync -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+
+  <style>
+    body {
+      background-color: #090d16;
+      color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+  </style>
+</head>
+<body class="min-h-screen bg-slate-950 text-slate-100 selection:bg-emerald-500 selection:text-white">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // --- HILFSFUNKTIONEN FÜR DATUM & WOCHE ---
+    const formatDateKey = (date) => {
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    };
+
+    const getMonday = (d) => {
+      const date = new Date(d);
+      const day = date.getDay();
+      const diff = date.getDate() - day + (day === 0 ? -6 : 1);
+      date.setDate(diff);
+      date.setHours(0, 0, 0, 0);
+      return date;
+    };
+
+    const getWeekDays = (mondayDate) => {
+      const days = [];
+      const dayNamesShort = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+      const dayNamesFull = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag'];
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(mondayDate);
+        d.setDate(d.getDate() + i);
+        days.push({
+          date: d,
+          key: formatDateKey(d),
+          dayIndex: i, // 0 = Mo ... 6 = So
+          short: dayNamesShort[i],
+          full: dayNamesFull[i],
+          dayNum: d.getDate(),
+          monthNum: d.getMonth() + 1
+        });
+      }
+      return days;
+    };
+
+    // --- STANDARD-GEWOHNHEITEN ---
+    const DEFAULT_HABITS = [
+      {
+        id: 'h1',
+        title: '16:8 Intervallfasten',
+        category: 'Ernährung',
+        icon: '⏱️',
+        color: 'emerald',
+        freqType: 'daily',
+        targetPerWeek: 7,
+        scheduledDays: [0, 1, 2, 3, 4, 5, 6]
+      },
+      {
+        id: 'h2',
+        title: 'Krafttraining / Kettlebell oder Laufen',
+        category: 'Fitness',
+        icon: '🏋️',
+        color: 'blue',
+        freqType: 'specific_days',
+        targetPerWeek: 4,
+        scheduledDays: [0, 2, 4, 6] // Alle 2 Tage: Mo, Mi, Fr, So
+      },
+      {
+        id: 'h3',
+        title: 'Mobility- & Dehn-Routine',
+        category: 'Gesundheit',
+        icon: '🧘',
+        color: 'purple',
+        freqType: 'times_per_week',
+        targetPerWeek: 3,
+        scheduledDays: [0, 1, 2, 3, 4, 5, 6]
+      },
+      {
+        id: 'h4',
+        title: 'Kreatin & Supplements',
+        category: 'Ernährung',
+        icon: '⚡',
+        color: 'amber',
+        freqType: 'daily',
+        targetPerWeek: 7,
+        scheduledDays: [0, 1, 2, 3, 4, 5, 6]
+      },
+      {
+        id: 'h5',
+        title: 'Pflanzenpflege & Luftfeuchtigkeit prüfen',
+        category: 'Zuhause',
+        icon: '🌿',
+        color: 'teal',
+        freqType: 'times_per_week',
+        targetPerWeek: 2,
+        scheduledDays: [0, 1, 2, 3, 4, 5, 6]
+      },
+      {
+        id: 'h6',
+        title: '3D-Druck / Projekt-Fokus',
+        category: 'Projekte',
+        icon: '🛠️',
+        color: 'indigo',
+        freqType: 'times_per_week',
+        targetPerWeek: 1,
+        scheduledDays: [0, 1, 2, 3, 4, 5, 6]
+      }
+    ];
+
+    const ICONS = ['⏱️', '🏋️', '🏃', '🧘', '⚡', '🌿', '🛠️', '💧', '📖', '🎯', '🍎', '💤'];
+    const CATEGORIES = ['Fitness', 'Ernährung', 'Gesundheit', 'Zuhause', 'Projekte', 'Mindset'];
+
+    // --- HAUPTKOMPONENTE ---
+    function App() {
+      const today = useMemo(() => {
+        const d = new Date();
+        d.setHours(0, 0, 0, 0);
+        return d;
+      }, []);
+
+      const [selectedDate, setSelectedDate] = useState(today);
+      const [currentWeekMonday, setCurrentWeekMonday] = useState(() => getMonday(today));
+      const [activeTab, setActiveTab] = useState('today'); // 'today' | 'week'
+
+      // Lokaler State (Habits & Logs)
+      const [habits, setHabits] = useState(() => {
+        const saved = localStorage.getItem('fokusflow_habits_v2');
+        return saved ? JSON.parse(saved) : DEFAULT_HABITS;
+      });
+
+      const [logs, setLogs] = useState(() => {
+        const saved = localStorage.getItem('fokusflow_logs_v2');
+        return saved ? JSON.parse(saved) : {};
+      });
+
+      // Cloud-Sync State
+      const [cloudConfig, setCloudConfig] = useState(() => {
+        const saved = localStorage.getItem('fokusflow_cloud_config');
+        return saved ? JSON.parse(saved) : {
+          enabled: false,
+          apiKey: '',
+          projectId: '',
+          syncKey: 'fokusflow-standard'
+        };
+      });
+      const [syncStatus, setSyncStatus] = useState('local'); // 'local' | 'connecting' | 'synced' | 'error'
+      const [syncMessage, setSyncMessage] = useState('Lokal gespeichert');
+      const [showCloudModal, setShowCloudModal] = useState(false);
+      const [showHabitModal, setShowHabitModal] = useState(false);
+      const [editingHabit, setEditingHabit] = useState(null);
+
+      const dbRef = useRef(null);
+      const isRemoteUpdate = useRef(false);
+
+      // Speichere lokal bei jeder Änderung
+      useEffect(() => {
+        localStorage.setItem('fokusflow_habits_v2', JSON.stringify(habits));
+        localStorage.setItem('fokusflow_logs_v2', JSON.stringify(logs));
+
+        // Wenn Cloud-Sync aktiv ist und die Änderung lokal gemacht wurde -> hochschicken
+        if (cloudConfig.enabled && dbRef.current && !isRemoteUpdate.current) {
+          pushToCloud(habits, logs);
+        }
+        isRemoteUpdate.current = false;
+      }, [habits, logs]);
+
+      // Firebase Initialisierung & Echtzeit-Listener
+      useEffect(() => {
+        if (!cloudConfig.enabled || !cloudConfig.apiKey || !cloudConfig.projectId || !cloudConfig.syncKey) {
+          setSyncStatus('local');
+          setSyncMessage('Lokal im Browser');
+          dbRef.current = null;
+          return;
+        }
+
+        let unsubscribe = null;
+        try {
+          setSyncStatus('connecting');
+          setSyncMessage('Verbinde mit Cloud...');
+
+          const firebaseConfig = {
+            apiKey: cloudConfig.apiKey.trim(),
+            authDomain: `${cloudConfig.projectId.trim()}.firebaseapp.com`,
+            projectId: cloudConfig.projectId.trim(),
+          };
+
+          // App neu initialisieren oder bestehende nutzen
+          let app;
+          if (!firebase.apps.length) {
+            app = firebase.initializeApp(firebaseConfig);
+          } else {
+            app = firebase.app();
+          }
+
+          const db = firebase.firestore(app);
+          dbRef.current = db;
+
+          const docRef = db.collection('fokusflow_sync').doc(cloudConfig.syncKey.trim());
+
+          unsubscribe = docRef.onSnapshot(
+            (doc) => {
+              if (doc.exists) {
+                const data = doc.data();
+                isRemoteUpdate.current = true;
+                if (data.habits) setHabits(data.habits);
+                if (data.logs) setLogs(data.logs);
+                setSyncStatus('synced');
+                setSyncMessage('Cloud synchronisiert');
+              } else {
+                // Dokument existiert noch nicht -> initial anlegen
+                docRef.set({
+                  habits,
+                  logs,
+                  updatedAt: new Date().toISOString()
+                }).then(() => {
+                  setSyncStatus('synced');
+                  setSyncMessage('Cloud initialisiert');
+                });
+              }
+            },
+            (err) => {
+              console.error('Firestore Sync Fehler:', err);
+              setSyncStatus('error');
+              setSyncMessage('Sync-Fehler (Prüfe Config)');
+            }
+          );
+        } catch (err) {
+          console.error('Firebase Init Fehler:', err);
+          setSyncStatus('error');
+          setSyncMessage('Ungültige Cloud-Daten');
+        }
+
+        return () => {
+          if (unsubscribe) unsubscribe();
+        };
+      }, [cloudConfig]);
+
+      const pushToCloud = async (newHabits, newLogs) => {
+        if (!dbRef.current || !cloudConfig.enabled) return;
+        try {
+          setSyncStatus('connecting');
+          await dbRef.current.collection('fokusflow_sync').doc(cloudConfig.syncKey.trim()).set({
+            habits: newHabits,
+            logs: newLogs,
+            updatedAt: new Date().toISOString()
+          }, { merge: true });
+          setSyncStatus('synced');
+          setSyncMessage('Cloud synchronisiert');
+        } catch (e) {
+          console.error('Push-Fehler:', e);
+          setSyncStatus('error');
+          setSyncMessage('Fehler beim Speichern');
+        }
+      };
+
+      // --- LOGIK FÜR FLEXIBLE HÄUFIGKEITEN ---
+      const weekDays = useMemo(() => getWeekDays(currentWeekMonday), [currentWeekMonday]);
+      const selectedDateKey = formatDateKey(selectedDate);
+      const selectedDayIndex = (selectedDate.getDay() + 6) % 7; // 0 = Mo ... 6 = So
+
+      // Wie oft wurde ein Habit in einer bestimmten Woche erledigt?
+      const getWeeklyCompletedCount = (habitId, weekDaysArray, excludeDateKey = null) => {
+        return weekDaysArray.reduce((acc, day) => {
+          if (excludeDateKey && day.key === excludeDateKey) return acc;
+          const isDone = logs[day.key]?.[habitId] === true;
+          return acc + (isDone ? 1 : 0);
+        }, 0);
+      };
+
+      // Ist ein Habit an einem bestimmten Tag fällig ("planned") oder optional ("rest")?
+      const getHabitStatusForDay = (habit, dayObj, weekDaysArray) => {
+        const isCompletedToday = logs[dayObj.key]?.[habit.id] === true;
+        const completedInWeekTotal = getWeeklyCompletedCount(habit.id, weekDaysArray);
+        const completedOtherDays = getWeeklyCompletedCount(habit.id, weekDaysArray, dayObj.key);
+
+        if (habit.freqType === 'daily') {
+          return {
+            isDue: true,
+            isCompleted: isCompletedToday,
+            reason: 'Täglich geplant',
+            weeklyProgress: `${completedInWeekTotal} / 7`
+          };
+        }
+
+        if (habit.freqType === 'specific_days') {
+          const isScheduledDay = (habit.scheduledDays || []).includes(dayObj.dayIndex);
+          const target = (habit.scheduledDays || []).length || 1;
+          return {
+            isDue: isScheduledDay,
+            isCompleted: isCompletedToday,
+            reason: isScheduledDay ? 'Heute eingeplant' : 'Geplanter Ruhetag',
+            weeklyProgress: `${completedInWeekTotal} / ${target}`
+          };
+        }
+
+        if (habit.freqType === 'times_per_week') {
+          const target = habit.targetPerWeek || 1;
+          const quotaAlreadyMetBeforeToday = completedOtherDays >= target;
+          return {
+            isDue: !quotaAlreadyMetBeforeToday,
+            isCompleted: isCompletedToday,
+            reason: quotaAlreadyMetBeforeToday ? `Wochenziel (${target}x) bereits erfüllt` : `Flexibel (${completedInWeekTotal}/${target} diese Woche)`,
+            weeklyProgress: `${completedInWeekTotal} / ${target}`
+          };
+        }
+
+        return { isDue: true, isCompleted: isCompletedToday, reason: '', weeklyProgress: '' };
+      };
+
+      // Toggle Habit an einem bestimmten Datum
+      const toggleHabit = (habitId, dateKey) => {
+        setLogs((prev) => {
+          const dayLogs = prev[dateKey] || {};
+          return {
+            ...prev,
+            [dateKey]: {
+              ...dayLogs,
+              [habitId]: !dayLogs[habitId]
+            }
+          };
+        });
+      };
+
+      // --- BERECHNUNGEN FÜR HEUTE / AUSGEWÄHLTEN TAG ---
+      const selectedDayWeekDays = useMemo(() => getWeekDays(getMonday(selectedDate)), [selectedDate]);
+
+      const { dueHabits, optionalHabits, todayProgress } = useMemo(() => {
+        const due = [];
+        const optional = [];
+        const dayObj = {
+          date: selectedDate,
+          key: selectedDateKey,
+          dayIndex: selectedDayIndex
+        };
+
+        habits.forEach((h) => {
+          const status = getHabitStatusForDay(h, dayObj, selectedDayWeekDays);
+          if (status.isDue) {
+            due.push({ ...h, status });
+          } else {
+            optional.push({ ...h, status });
+          }
+        });
+
+        const completedDue = due.filter((h) => h.status.isCompleted).length;
+        const completedOptional = optional.filter((h) => h.status.isCompleted).length;
+        const pct = due.length > 0 ? Math.round((completedDue / due.length) * 100) : 100;
+
+        return {
+          dueHabits: due,
+          optionalHabits: optional,
+          todayProgress: {
+            completedDue,
+            totalDue: due.length,
+            completedOptional,
+            percentage: pct
+          }
+        };
+      }, [habits, logs, selectedDate, selectedDateKey, selectedDayIndex, selectedDayWeekDays]);
+
+      // --- BERECHNUNGEN FÜR DIE WOCHENÜBERSICHT ---
+      const weeklyStats = useMemo(() => {
+        let totalTargetActions = 0;
+        let totalCompletedActions = 0;
+
+        const perHabitStats = habits.map((h) => {
+          const count = getWeeklyCompletedCount(h.id, weekDays);
+          let target = 7;
+          if (h.freqType === 'specific_days') target = (h.scheduledDays || []).length || 1;
+          if (h.freqType === 'times_per_week') target = h.targetPerWeek || 1;
+
+          totalTargetActions += target;
+          totalCompletedActions += Math.min(count, target); // Deckeln für faire 100%-Rechnung, Bonus separat
+
+          const metGoal = count >= target;
+          return {
+            habit: h,
+            count,
+            target,
+            metGoal,
+            pct: Math.min(100, Math.round((count / target) * 100))
+          };
+        });
+
+        const overallPct = totalTargetActions > 0
+          ? Math.round((totalCompletedActions / totalTargetActions) * 100)
+          : 0;
+
+        const goalsMetCount = perHabitStats.filter((s) => s.metGoal).length;
+
+        return {
+          perHabitStats,
+          overallPct,
+          goalsMetCount,
+          totalHabits: habits.length
+        };
+      }, [habits, logs, weekDays]);
+
+      // --- BACKUP EXPORT / IMPORT (JSON) ---
+      const exportBackup = () => {
+        const dataStr = JSON.stringify({ habits, logs, exportedAt: new Date().toISOString() }, null, 2);
+        const blob = new Blob([dataStr], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `fokusflow-backup-${formatDateKey(new Date())}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      const importBackup = (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          try {
+            const parsed = JSON.parse(ev.target.result);
+            if (parsed.habits && parsed.logs) {
+              setHabits(parsed.habits);
+              setLogs(parsed.logs);
+              alert('Backup erfolgreich wiederhergestellt!');
+            }
+          } catch (err) {
+            alert('Ungültige Backup-Datei.');
+          }
+        };
+        reader.readAsText(file);
+      };
+
+      // Frequenz-Label für Badges
+      const getFrequencyLabel = (h) => {
+        if (h.freqType === 'daily') return 'Täglich (7x/Wo)';
+        if (h.freqType === 'times_per_week') return `${h.targetPerWeek}x pro Woche (flexibel)`;
+        if (h.freqType === 'specific_days') {
+          const names = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+          const days = (h.scheduledDays || []).map((i) => names[i]).join(', ');
+          if (JSON.stringify(h.scheduledDays) === JSON.stringify([0, 2, 4, 6])) {
+            return 'Alle ~2 Tage (Mo, Mi, Fr, So)';
+          }
+          return `Feste Tage (${days})`;
+        }
+        return 'Täglich';
+      };
+
+      return (
+        <div className="max-w-5xl mx-auto px-4 py-6 md:py-10 pb-24">
+          {/* HEADER MIT CLOUD-STATUS */}
+          <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-800/80">
+            <div>
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-xl shadow-lg shadow-emerald-900/30">
+                  🎯
+                </div>
+                <div>
+                  <h1 className="text-2xl font-bold tracking-tight text-white flex items-center gap-2">
+                    FokusFlow
+                    <span className="text-xs font-medium px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                      Cloud Edition
+                    </span>
+                  </h1>
+                  <p className="text-xs text-slate-400">
+                    Tägliche Routinen, flexible Trainings-Rhythmen & Wochenbilanz
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Cloud & Neues Ziel Buttons */}
+            <div className="flex items-center gap-2.5 self-start sm:self-auto">
+              <button
+                onClick={() => setShowCloudModal(true)}
+                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-medium border transition-all ${
+                  syncStatus === 'synced'
+                    ? 'bg-emerald-950/50 border-emerald-500/40 text-emerald-300 hover:bg-emerald-900/40'
+                    : syncStatus === 'error'
+                    ? 'bg-rose-950/50 border-rose-500/40 text-rose-300'
+                    : 'bg-slate-900 border-slate-700/80 text-slate-300 hover:border-slate-600'
+                }`}
+              >
+                <span className={`w-2 h-2 rounded-full ${
+                  syncStatus === 'synced' ? 'bg-emerald-400 animate-pulse' :
+                  syncStatus === 'connecting' ? 'bg-amber-400 animate-ping' :
+                  syncStatus === 'error' ? 'bg-rose-500' : 'bg-slate-400'
+                }`} />
+                <span>☁️ {syncMessage}</span>
+              </button>
+
+              <button
+                onClick={() => {
+                  setEditingHabit(null);
+                  setShowHabitModal(true);
+                }}
+                className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-slate-950 shadow-lg shadow-emerald-500/20 transition-all cursor-pointer"
+              >
+                <span>＋</span>
+                <span>Neues Ziel</span>
+              </button>
+            </div>
+          </header>
+
+          {/* NAVIGATION TABS & WOCHEN-SCHNELLWAHL */}
+          <div className="mt-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="inline-flex p-1 rounded-xl bg-slate-900 border border-slate-800 self-start">
+              <button
+                onClick={() => setActiveTab('today')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  activeTab === 'today'
+                    ? 'bg-slate-800 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                ☀️ Tages-Fokus
+              </button>
+              <button
+                onClick={() => setActiveTab('week')}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  activeTab === 'week'
+                    ? 'bg-slate-800 text-white shadow'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                📊 Wochen-Matrix & Erfolge
+              </button>
+            </div>
+
+            {/* Wochen-Blätterer */}
+            <div className="flex items-center gap-2 bg-slate-900/90 border border-slate-800 px-3 py-1.5 rounded-xl text-xs">
+              <button
+                onClick={() => {
+                  const prev = new Date(currentWeekMonday);
+                  prev.setDate(prev.getDate() - 7);
+                  setCurrentWeekMonday(prev);
+                  setSelectedDate(prev);
+                }}
+                className="px-2 py-1 rounded hover:bg-slate-800 text-slate-300"
+                title="Vorherige Woche"
+              >
+                ◀
+              </button>
+              <span className="font-medium text-slate-200 min-w-[140px] text-center">
+                {weekDays[0].dayNum}.{weekDays[0].monthNum}. – {weekDays[6].dayNum}.{weekDays[6].monthNum}.{weekDays[6].date.getFullYear()}
+              </span>
+              <button
+                onClick={() => {
+                  const next = new Date(currentWeekMonday);
+                  next.setDate(next.getDate() + 7);
+                  setCurrentWeekMonday(next);
+                  setSelectedDate(next);
+                }}
+                className="px-2 py-1 rounded hover:bg-slate-800 text-slate-300"
+                title="Nächste Woche"
+              >
+                ▶
+              </button>
+              <button
+                onClick={() => {
+                  setCurrentWeekMonday(getMonday(today));
+                  setSelectedDate(today);
+                }}
+                className="ml-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-400 font-medium"
+              >
+                Heute
+              </button>
+            </div>
+          </div>
+
+          {/* 7-TAGE LEISTE ZUM SCHNELLEN WECHSELN */}
+          <div className="grid grid-cols-7 gap-1.5 sm:gap-2.5 mt-5">
+            {weekDays.map((d) => {
+              const isSelected = d.key === selectedDateKey;
+              const isToday = d.key === formatDateKey(today);
+              return (
+                <button
+                  key={d.key}
+                  onClick={() => setSelectedDate(d.date)}
+                  className={`flex flex-col items-center py-2.5 px-1 rounded-xl border transition-all ${
+                    isSelected
+                      ? 'bg-emerald-500/15 border-emerald-500 text-white shadow-md shadow-emerald-950/50'
+                      : 'bg-slate-900/60 border-slate-800/80 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                  }`}
+                >
+                  <span className="text-[11px] uppercase tracking-wider font-semibold">
+                    {d.short}
+                  </span>
+                  <span className={`text-base sm:text-lg font-bold mt-0.5 ${isSelected ? 'text-emerald-400' : 'text-slate-200'}`}>
+                    {d.dayNum}
+                  </span>
+                  {isToday && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 mt-1" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* TAB 1: TAGES-FOKUS */}
+          {activeTab === 'today' && (
+            <div className="mt-6 space-y-6">
+              {/* Tages-Bilanz Karte */}
+              <div className="p-5 sm:p-6 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900 to-slate-850 border border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-6">
+                <div className="space-y-1.5 text-center sm:text-left">
+                  <div className="text-xs font-semibold uppercase tracking-wider text-emerald-400">
+                    {weekDays[selectedDayIndex]?.full}, {selectedDate.getDate()}.{selectedDate.getMonth() + 1}.{selectedDate.getFullYear()}
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-bold text-white">
+                    {todayProgress.percentage === 100
+                      ? 'Stark! Alle eingeplanten Ziele für heute erreicht 🎉'
+                      : `${todayProgress.completedDue} von ${todayProgress.totalDue} geplanten Zielen erledigt`}
+                  </h2>
+                  <p className="text-xs sm:text-sm text-slate-400">
+                    Ruhetage und bereits erfüllte Wochenziele ziehen deinen Tages-Score nicht herunter.
+                    {todayProgress.completedOptional > 0 && (
+                      <span className="text-emerald-400 font-medium ml-1">
+                        (+{todayProgress.completedOptional} Bonus-Einheit heute!)
+                      </span>
+                    )}
+                  </p>
+                </div>
+
+                {/* Kreis-Fortschritt */}
+                <div className="relative w-24 h-24 flex items-center justify-center shrink-0">
+                  <svg className="w-full h-full -rotate-90" viewBox="0 0 100 100">
+                    <circle cx="50" cy="50" r="42" className="stroke-slate-800" strokeWidth="10" fill="transparent" />
+                    <circle
+                      cx="50"
+                      cy="50"
+                      r="42"
+                      className="stroke-emerald-500 transition-all duration-500"
+                      strokeWidth="10"
+                      strokeDasharray={2 * Math.PI * 42}
+                      strokeDashoffset={2 * Math.PI * 42 * (1 - todayProgress.percentage / 100)}
+                      strokeLinecap="round"
+                      fill="transparent"
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center">
+                    <span className="text-xl font-extrabold text-white">{todayProgress.percentage}%</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Heute eingeplante Ziele */}
+              <div>
+                <h3 className="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3 flex items-center justify-between">
+                  <span>Heute anstehend ({dueHabits.length})</span>
+                  <span className="text-xs font-normal text-slate-500">Klicken zum Abhaken</span>
+                </h3>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {dueHabits.map((h) => (
+                    <div
+                      key={h.id}
+                      onClick={() => toggleHabit(h.id, selectedDateKey)}
+                      className={`group p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                        h.status.isCompleted
+                          ? 'bg-emerald-950/25 border-emerald-500/40 text-white'
+                          : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3.5 min-w-0">
+                        <div className={`w-11 h-11 rounded-xl flex items-center justify-center text-xl shrink-0 transition-transform group-active:scale-95 ${
+                          h.status.isCompleted ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800'
+                        }`}>
+                          {h.status.isCompleted ? '✓' : h.icon}
+                        </div>
+                        <div className="min-w-0">
+                          <div className={`font-semibold text-sm sm:text-base truncate ${
+                            h.status.isCompleted ? 'line-through text-slate-300' : 'text-white'
+                          }`}>
+                            {h.title}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2 mt-1">
+                            <span className="text-[11px] px-2 py-0.5 rounded-md bg-slate-800 text-slate-300">
+                              {getFrequencyLabel(h)}
+                            </span>
+                            <span className="text-[11px] text-emerald-400 font-medium">
+                              Woche: {h.status.weeklyProgress}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={() => {
+                            setEditingHabit(h);
+                            setShowHabitModal(true);
+                          }}
+                          className="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 text-xs"
+                          title="Bearbeiten"
+                        >
+                          ✏️
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Optionale Ziele / Heute Ruhetag / Wochenziel bereits erreicht */}
+              {optionalHabits.length > 0 && (
+                <div className="pt-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-3">
+                    Heute Ruhetag oder Wochenziel bereits erfüllt – Optional ({optionalHabits.length})
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 opacity-80">
+                    {optionalHabits.map((h) => (
+                      <div
+                        key={h.id}
+                        onClick={() => toggleHabit(h.id, selectedDateKey)}
+                        className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                          h.status.isCompleted
+                            ? 'bg-emerald-950/20 border-emerald-500/40 text-white'
+                            : 'bg-slate-900/40 border-slate-800/60 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg shrink-0 ${
+                            h.status.isCompleted ? 'bg-emerald-500 text-slate-950 font-bold' : 'bg-slate-800/70 text-slate-400'
+                          }`}>
+                            {h.status.isCompleted ? '✓' : h.icon}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="font-medium text-sm text-slate-300 truncate">
+                              {h.title}
+                            </div>
+                            <div className="text-[11px] text-slate-400 mt-0.5">
+                              {h.status.reason} • <span className="text-emerald-400">{h.status.weeklyProgress}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingHabit(h);
+                            setShowHabitModal(true);
+                          }}
+                          className="p-2 rounded-lg text-slate-500 hover:text-white text-xs"
+                        >
+                          ✏️
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* TAB 2: WOCHEN-MATRIX & ERFOLGE */}
+          {activeTab === 'week' && (
+            <div className="mt-6 space-y-6">
+              {/* Wochen-KPI-Karten */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+                  <div className="text-xs text-slate-400">Wochen-Erfolgsquote</div>
+                  <div className="text-2xl font-extrabold text-emerald-400 mt-1">
+                    {weeklyStats.overallPct}%
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-1">
+                    Berechnet nach deinen individuellen Ziel-Intervallen
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800">
+                  <div className="text-xs text-slate-400">Erfüllte Wochenziele</div>
+                  <div className="text-2xl font-extrabold text-white mt-1">
+                    {weeklyStats.goalsMetCount} <span className="text-base font-normal text-slate-400">/ {weeklyStats.totalHabits}</span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-1">
+                    Gewohnheiten mit 100% Wochen-Soll
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex flex-col justify-between">
+                  <div className="text-xs text-slate-400">Datensicherung (Datei)</div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <button
+                      onClick={exportBackup}
+                      className="flex-1 py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200"
+                    >
+                      ⬇ Backup (JSON)
+                    </button>
+                    <label className="flex-1 py-1.5 px-3 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-200 text-center cursor-pointer">
+                      ⬆ Import
+                      <input type="file" accept=".json" onChange={importBackup} className="hidden" />
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Interaktive 7-Tage-Matrix */}
+              <div className="rounded-2xl bg-slate-900 border border-slate-800 overflow-x-auto">
+                <table className="w-full text-left border-collapse min-w-[640px]">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-xs text-slate-400">
+                      <th className="py-3.5 px-4 font-semibold">Gewohnheit & Rhythmus</th>
+                      {weekDays.map((d) => (
+                        <th key={d.key} className="py-3.5 px-2 text-center font-semibold">
+                          <div>{d.short}</div>
+                          <div className="text-[11px] text-slate-500">{d.dayNum}.{d.monthNum}.</div>
+                        </th>
+                      ))}
+                      <th className="py-3.5 px-4 text-right font-semibold">Wochen-Soll</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/70 text-sm">
+                    {weeklyStats.perHabitStats.map(({ habit, count, target, metGoal }) => (
+                      <tr key={habit.id} className="hover:bg-slate-850/60">
+                        <td className="py-3.5 px-4">
+                          <div className="flex items-center gap-2.5">
+                            <span className="text-lg">{habit.icon}</span>
+                            <div>
+                              <div className="font-medium text-white">{habit.title}</div>
+                              <div className="text-[11px] text-slate-400">{getFrequencyLabel(habit)}</div>
+                            </div>
+                          </div>
+                        </td>
+
+                        {weekDays.map((d) => {
+                          const isDone = logs[d.key]?.[habit.id] === true;
+                          const isScheduledDay =
+                            habit.freqType === 'daily' ||
+                            (habit.freqType === 'specific_days' && (habit.scheduledDays || []).includes(d.dayIndex));
+
+                          return (
+                            <td key={d.key} className="py-3 px-2 text-center">
+                              <button
+                                onClick={() => toggleHabit(habit.id, d.key)}
+                                className={`w-9 h-9 rounded-xl font-bold text-xs transition-all inline-flex items-center justify-center ${
+                                  isDone
+                                    ? 'bg-emerald-500 text-slate-950 shadow-sm shadow-emerald-500/30'
+                                    : isScheduledDay
+                                    ? 'bg-slate-800 text-slate-400 hover:bg-slate-700 border border-slate-700'
+                                    : 'bg-slate-900/50 text-slate-600 hover:bg-slate-800 border border-slate-800/60'
+                                }`}
+                                title={isScheduledDay ? 'Geplanter Tag' : 'Optional / Flexibel'}
+                              >
+                                {isDone ? '✓' : isScheduledDay ? '•' : '–'}
+                              </button>
+                            </td>
+                          );
+                        })}
+
+                        <td className="py-3.5 px-4 text-right">
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                            metGoal
+                              ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
+                              : 'bg-slate-800 text-slate-300'
+                          }`}>
+                            {count} / {target} {metGoal && '✓'}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* MODAL 1: ZIEL ERSTELLEN / BEARBEITEN */}
+          {showHabitModal && (
+            <HabitModal
+              habit={editingHabit}
+              onClose={() => setShowHabitModal(false)}
+              onSave={(savedHabit) => {
+                if (editingHabit) {
+                  setHabits((prev) => prev.map((h) => (h.id === savedHabit.id ? savedHabit : h)));
+                } else {
+                  setHabits((prev) => [...prev, { ...savedHabit, id: 'h_' + Date.now() }]);
+                }
+                setShowHabitModal(false);
+              }}
+              onDelete={(id) => {
+                setHabits((prev) => prev.filter((h) => h.id !== id));
+                setShowHabitModal(false);
+              }}
+            />
+          )}
+
+          {/* MODAL 2: CLOUD-SYNC EINRICHTUNG */}
+          {showCloudModal && (
+            <CloudSyncModal
+              config={cloudConfig}
+              onClose={() => setShowCloudModal(false)}
+              onSave={(newCfg) => {
+                localStorage.setItem('fokusflow_cloud_config', JSON.stringify(newCfg));
+                setCloudConfig(newCfg);
+                setShowCloudModal(false);
+              }}
+            />
+          )}
+        </div>
+      );
+    }
+
+    // --- KOMPONENTE: GEWOHNHEIT MODAL ---
+    function HabitModal({ habit, onClose, onSave, onDelete }) {
+      const [title, setTitle] = useState(habit?.title || '');
+      const [category, setCategory] = useState(habit?.category || 'Fitness');
+      const [icon, setIcon] = useState(habit?.icon || '🏋️');
+      const [freqType, setFreqType] = useState(habit?.freqType || 'daily');
+      const [targetPerWeek, setTargetPerWeek] = useState(habit?.targetPerWeek || 3);
+      const [scheduledDays, setScheduledDays] = useState(habit?.scheduledDays || [0, 2, 4, 6]);
+
+      const dayNames = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+
+      const toggleDay = (idx) => {
+        if (scheduledDays.includes(idx)) {
+          if (scheduledDays.length > 1) {
+            setScheduledDays(scheduledDays.filter((d) => d !== idx));
+          }
+        } else {
+          setScheduledDays([...scheduledDays, idx].sort());
+        }
+      };
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        if (!title.trim()) return;
+        onSave({
+          ...(habit || {}),
+          title: title.trim(),
+          category,
+          icon,
+          freqType,
+          targetPerWeek: freqType === 'daily' ? 7 : freqType === 'specific_days' ? scheduledDays.length : Number(targetPerWeek),
+          scheduledDays: freqType === 'specific_days' ? scheduledDays : [0, 1, 2, 3, 4, 5, 6]
+        });
+      };
+
+      return (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-white">
+                {habit ? 'Gewohnheit anpassen' : 'Neues Ziel anlegen'}
+              </h3>
+              <button onClick={onClose} className="text-slate-400 hover:text-white">✕</button>
+            </div>
+
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Bezeichnung</label>
+                <input
+                  type="text"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="z.B. Krafttraining, Laufen, 16:8 Fasten..."
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm focus:border-emerald-500 focus:outline-none"
+                  required
+                />
+              </div>
+
+              {/* Icon & Kategorie */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Kategorie</label>
+                  <select
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-white text-sm"
+                  >
+                    {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Icon</label>
+                  <div className="flex flex-wrap gap-1.5 bg-slate-950 p-1.5 rounded-xl border border-slate-800">
+                    {ICONS.slice(0, 6).map((ic) => (
+                      <button
+                        type="button"
+                        key={ic}
+                        onClick={() => setIcon(ic)}
+                        className={`w-7 h-7 rounded-lg flex items-center justify-center text-sm ${
+                          icon === ic ? 'bg-emerald-500 text-slate-950' : 'hover:bg-slate-800'
+                        }`}
+                      >
+                        {ic}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Rhythmus-Auswahl */}
+              <div>
+                <label className="block text-xs text-slate-400 mb-1.5">Wie oft möchtest du das Ziel ausführen?</label>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setFreqType('daily')}
+                    className={`py-2.5 px-2 rounded-xl border font-medium ${
+                      freqType === 'daily'
+                        ? 'bg-emerald-500/15 border-emerald-500 text-emerald-300'
+                        : 'bg-slate-950 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    Täglich (7x)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFreqType('specific_days')}
+                    className={`py-2.5 px-2 rounded-xl border font-medium ${
+                      freqType === 'specific_days'
+                        ? 'bg-emerald-500/15 border-emerald-500 text-emerald-300'
+                        : 'bg-slate-950 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    Feste Tage / Alle 2 Tage
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFreqType('times_per_week')}
+                    className={`py-2.5 px-2 rounded-xl border font-medium ${
+                      freqType === 'times_per_week'
+                        ? 'bg-emerald-500/15 border-emerald-500 text-emerald-300'
+                        : 'bg-slate-950 border-slate-800 text-slate-400'
+                    }`}
+                  >
+                    X-mal / Woche
+                  </button>
+                </div>
+              </div>
+
+              {/* Zusatzoptionen für "Feste Wochentage" */}
+              {freqType === 'specific_days' && (
+                <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-400">Wochentage wählen:</span>
+                    <button
+                      type="button"
+                      onClick={() => setScheduledDays([0, 2, 4, 6])}
+                      className="text-[11px] text-emerald-400 hover:underline"
+                    >
+                      Schnellwahl: Alle 2 Tage (Mo,Mi,Fr,So)
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-7 gap-1.5">
+                    {dayNames.map((name, i) => (
+                      <button
+                        type="button"
+                        key={name}
+                        onClick={() => toggleDay(i)}
+                        className={`py-2 rounded-lg text-xs font-bold border ${
+                          scheduledDays.includes(i)
+                            ? 'bg-emerald-500 text-slate-950 border-emerald-400'
+                            : 'bg-slate-900 text-slate-400 border-slate-800'
+                        }`}
+                      >
+                        {name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Zusatzoptionen für "Flexibel X-mal pro Woche" */}
+              {freqType === 'times_per_week' && (
+                <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-400">Wochenziel (freie Zeiteinteilung):</span>
+                    <span className="font-bold text-emerald-400">{targetPerWeek}x pro Woche</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="6"
+                    value={targetPerWeek}
+                    onChange={(e) => setTargetPerWeek(Number(e.target.value))}
+                    className="w-full accent-emerald-500"
+                  />
+                  <div className="flex justify-between text-[10px] text-slate-500">
+                    <span>1x / Woche</span>
+                    <span>3x / Woche</span>
+                    <span>6x / Woche</span>
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+                {habit ? (
+                  <button
+                    type="button"
+                    onClick={() => onDelete(habit.id)}
+                    className="px-3 py-2 rounded-xl text-xs font-medium text-rose-400 hover:bg-rose-950/50"
+                  >
+                    🗑️ Löschen
+                  </button>
+                ) : <div />}
+
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="px-4 py-2 rounded-xl text-xs text-slate-400 hover:bg-slate-800"
+                  >
+                    Abbrechen
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 rounded-xl text-xs font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950"
+                  >
+                    Speichern
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    // --- KOMPONENTE: CLOUD-SYNC MODAL ---
+    function CloudSyncModal({ config, onClose, onSave }) {
+      const [enabled, setEnabled] = useState(config.enabled);
+      const [apiKey, setApiKey] = useState(config.apiKey);
+      const [projectId, setProjectId] = useState(config.projectId);
+      const [syncKey, setSyncKey] = useState(config.syncKey || 'mein-fokus-2026');
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        onSave({ enabled, apiKey, projectId, syncKey });
+      };
+
+      return (
+        <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                <span>☁️</span> Echtzeit Cloud-Synchronisierung
+              </h3>
+              <button onClick={onClose} className="text-slate-400 hover:text-white">✕</button>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-300 space-y-1.5 leading-relaxed">
+              <p className="font-semibold text-emerald-400">So verbindest du Mac & iPhone kostenlos in 2 Minuten:</p>
+              <ol className="list-decimal list-inside space-y-1 text-slate-400">
+                <li>Öffne <a href="https://console.firebase.google.com" target="_blank" className="text-emerald-400 underline">console.firebase.google.com</a> und erstelle ein kostenloses Projekt.</li>
+                <li>Aktiviere links unter <b>Build → Firestore Database</b> eine Datenbank (im Testmodus starten).</li>
+                <li>Klicke in den Projekteinstellungen auf <b>Web-App (&lt;/&gt;)</b> und kopiere <code>apiKey</code> sowie <code>projectId</code> hier hinein.</li>
+              </ol>
+            </div>
+
+            <form onSubmit={handleSubmit} className="space-y-3.5">
+              <label className="flex items-center gap-3 p-3 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enabled}
+                  onChange={(e) => setEnabled(e.target.checked)}
+                  className="w-4 h-4 accent-emerald-500"
+                />
+                <span className="text-sm font-medium text-white">Cloud-Synchronisierung aktivieren</span>
+              </label>
+
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Firebase API Key</label>
+                <input
+                  type="text"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="AIzaSy..."
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Firebase Project ID</label>
+                <input
+                  type="text"
+                  value={projectId}
+                  onChange={(e) => setProjectId(e.target.value)}
+                  placeholder="mein-fokusflow-db"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">Persönlicher Sync-Schlüssel (auf allen Geräten gleich eingeben)</label>
+                <input
+                  type="text"
+                  value={syncKey}
+                  onChange={(e) => setSyncKey(e.target.value)}
+                  placeholder="mein-fokus-2026"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-white text-xs font-mono"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-4 py-2 rounded-xl text-xs text-slate-400 hover:bg-slate-800"
+                >
+                  Schließen
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 rounded-xl text-xs font-bold bg-emerald-500 hover:bg-emerald-400 text-slate-950"
+                >
+                  Verbinden & Speichern
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
